@@ -415,6 +415,46 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV2 {
                   }),
                 ),
               }),
+              z.object({
+                type: z.literal('mcp_list_tools'),
+                id: z.string(),
+                server_label: z.string(),
+                tools: z.array(
+                  z.object({
+                    annotations: z
+                      .union([z.array(z.any()), z.record(z.string(), z.any())])
+                      .nullish(),
+                    description: z.string(),
+                    name: z.string(),
+                    input_schema: z.object({
+                      type: z.literal('object'),
+                      properties: z.record(z.string(), z.any()),
+                      required: z.array(z.string()).nullish(),
+                    }),
+                  }),
+                ),
+              }),
+              z.object({
+                id: z.string(),
+                type: z.literal('mcp_call'),
+                approval_request_id: z.string().nullable(),
+                arguments: z.string().nullable(),
+                error: z
+                  .union([
+                    z.string(),
+                    z
+                      .object({
+                        type: z.string().nullish(),
+                        code: z.number().nullish(),
+                        message: z.string().nullish(),
+                      })
+                      .passthrough(),
+                  ])
+                  .nullable(),
+                name: z.string(),
+                output: z.string().nullable(),
+                server_label: z.string().nullable(),
+              }),
             ]),
           ),
           service_tier: z.string().nullish(),
@@ -588,6 +628,73 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV2 {
           });
           break;
         }
+
+        case 'mcp_list_tools': {
+          content.push({
+            type: 'tool-call',
+            toolCallId: part.id,
+            toolName: 'mcp_list_tools',
+            input: '',
+            providerExecuted: true,
+            providerMetadata: {
+              openai: {
+                itemId: part.id,
+                serverLabel: part.server_label,
+              },
+            },
+          });
+
+          content.push({
+            type: 'tool-result',
+            toolCallId: part.id,
+            toolName: 'mcp_list_tools_result',
+            result: {
+              type: 'mcp_list_tools_result',
+              ...(part.tools && { tools: part.tools }),
+            },
+            providerExecuted: true,
+            providerMetadata: {
+              openai: {
+                itemId: part.id,
+                serverLabel: part.server_label,
+              },
+            },
+          });
+
+          break;
+        }
+
+        case 'mcp_call': {
+          content.push({
+            type: 'tool-call',
+            toolCallId: part.id,
+            toolName: part.name,
+            input: JSON.stringify(part.arguments),
+            providerExecuted: true,
+            providerMetadata: {
+              openai: {
+                itemId: part.id,
+                serverLabel: part.server_label,
+              },
+            },
+          });
+
+          content.push({
+            type: 'tool-result',
+            toolCallId: part.id,
+            toolName: 'mcp',
+            result: {
+              type: 'mcp_call_result',
+              ...(part.output && { output: part.output }),
+              ...(part.arguments && { arguments: part.arguments }),
+              name: part.name,
+              server_label: part.server_label,
+              error: part.error,
+            },
+            providerExecuted: true,
+          });
+          break;
+        }
       }
     }
 
@@ -698,7 +805,10 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV2 {
             // handle failed chunk parsing / validation:
             if (!chunk.success) {
               finishReason = 'error';
-              controller.enqueue({ type: 'error', error: chunk.error });
+              controller.enqueue({
+                type: 'error',
+                error: (chunk as any).error,
+              });
               return;
             }
 
@@ -776,6 +886,23 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV2 {
                     },
                   },
                 });
+              } else if (value.item.type === 'mcp_call') {
+                ongoingToolCalls[value.output_index] = {
+                  toolName: value.item.name,
+                  toolCallId: value.item.id,
+                };
+
+                controller.enqueue({
+                  type: 'tool-input-start',
+                  id: value.item.id,
+                  toolName: value.item.name,
+                });
+              } else if (value.item.type === 'mcp_list_tools') {
+                controller.enqueue({
+                  type: 'tool-input-start',
+                  id: value.item.id,
+                  toolName: 'mcp_list_tools',
+                });
               }
             } else if (isResponseOutputItemDoneChunk(value)) {
               if (value.item.type === 'function_call') {
@@ -796,6 +923,57 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV2 {
                     openai: {
                       itemId: value.item.id,
                     },
+                  },
+                });
+              } else if (value.item.type === 'mcp_call') {
+                ongoingToolCalls[value.output_index] = undefined;
+
+                controller.enqueue({
+                  type: 'tool-input-end',
+                  id: value.item.id,
+                });
+
+                controller.enqueue({
+                  type: 'tool-call',
+                  toolCallId: value.item.id,
+                  toolName: value.item.name,
+                  input: JSON.stringify(value.item.arguments),
+                });
+
+                controller.enqueue({
+                  type: 'tool-result',
+                  toolCallId: value.item.id,
+                  toolName: value.item.name,
+                  result: {
+                    type: 'mcp_tool_result',
+                    status: value.item.status || 'completed',
+                    ...(value.item.arguments && {
+                      arguments: value.item.arguments,
+                    }),
+                    ...(value.item.output && { output: value.item.output }),
+                  },
+                });
+              } else if (value.item.type === 'mcp_list_tools') {
+                controller.enqueue({
+                  type: 'tool-input-end',
+                  id: value.item.id,
+                });
+
+                controller.enqueue({
+                  type: 'tool-call',
+                  toolCallId: value.item.id,
+                  toolName: 'mcp_list_tools',
+                  input: '',
+                });
+
+                controller.enqueue({
+                  type: 'tool-result',
+                  toolCallId: value.item.id,
+                  toolName: 'mcp_list_tools',
+                  result: {
+                    type: 'mcp_tool_result',
+                    status: value.item.status || 'completed',
+                    ...(value.item.tools && { tools: value.item.tools }),
                   },
                 });
               } else if (value.item.type === 'web_search_call') {
@@ -1137,6 +1315,23 @@ const responseOutputItemAddedSchema = z.object({
         )
         .optional(),
     }),
+    z.object({
+      type: z.literal('mcp_call'),
+      id: z.string(),
+      status: z.literal('completed'),
+      arguments: z.string(),
+      output: z.string(),
+      error: z.string().nullish(),
+      name: z.string(),
+      server_label: z.string(),
+    }),
+    z.object({
+      type: z.literal('mcp_list_tools'),
+      id: z.string(),
+      status: z.literal('completed'),
+      server_label: z.string(),
+      tools: z.array(z.any()),
+    }),
   ]),
 });
 
@@ -1184,6 +1379,23 @@ const responseOutputItemDoneSchema = z.object({
           }),
         )
         .nullish(),
+    }),
+    z.object({
+      type: z.literal('mcp_call'),
+      id: z.string(),
+      status: z.literal('completed'),
+      arguments: z.string(),
+      output: z.string(),
+      error: z.string().nullish(),
+      name: z.string(),
+      server_label: z.string(),
+    }),
+    z.object({
+      type: z.literal('mcp_list_tools'),
+      id: z.string(),
+      status: z.literal('completed'),
+      server_label: z.string(),
+      tools: z.array(z.any()),
     }),
   ]),
 });
