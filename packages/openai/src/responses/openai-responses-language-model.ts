@@ -938,6 +938,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV2 {
                   toolCallId: value.item.id,
                   toolName: value.item.name,
                   input: JSON.stringify(value.item.arguments),
+                  providerExecuted: true,
                 });
 
                 controller.enqueue({
@@ -952,6 +953,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV2 {
                     }),
                     ...(value.item.output && { output: value.item.output }),
                   },
+                  providerExecuted: true,
                 });
               } else if (value.item.type === 'mcp_list_tools') {
                 controller.enqueue({
@@ -964,6 +966,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV2 {
                   toolCallId: value.item.id,
                   toolName: 'mcp_list_tools',
                   input: '',
+                  providerExecuted: true,
                 });
 
                 controller.enqueue({
@@ -975,6 +978,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV2 {
                     status: value.item.status || 'completed',
                     ...(value.item.tools && { tools: value.item.tools }),
                   },
+                  providerExecuted: true,
                 });
               } else if (value.item.type === 'web_search_call') {
                 ongoingToolCalls[value.output_index] = undefined;

@@ -243,7 +243,7 @@ export function runToolsTransformation<TOOLS extends ToolSet>({
 
             toolInputs.set(toolCall.toolCallId, toolCall.input);
 
-            if (tool.onInputAvailable != null) {
+            if (tool?.onInputAvailable != null) {
               await tool.onInputAvailable({
                 input: toolCall.input,
                 toolCallId: toolCall.toolCallId,
@@ -254,7 +254,7 @@ export function runToolsTransformation<TOOLS extends ToolSet>({
             }
 
             // Only execute tools that are not provider-executed:
-            if (tool.execute != null && toolCall.providerExecuted !== true) {
+            if (tool?.execute != null && toolCall.providerExecuted !== true) {
               const toolExecutionId = generateId(); // use our own id to guarantee uniqueness
               outstandingToolResults.add(toolExecutionId);
 

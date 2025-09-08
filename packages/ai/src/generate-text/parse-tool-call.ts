@@ -26,6 +26,19 @@ export async function parseToolCall<TOOLS extends ToolSet>({
   messages: ModelMessage[];
 }): Promise<TypedToolCall<TOOLS>> {
   try {
+    if (toolCall.providerExecuted === true) {
+      const parsedInput = await safeParseJSON({ text: toolCall.input });
+      return {
+        type: 'tool-call',
+        toolCallId: toolCall.toolCallId,
+        toolName: toolCall.toolName,
+        input: parsedInput.success ? parsedInput.value : toolCall.input,
+        providerExecuted: true,
+        providerMetadata: toolCall.providerMetadata,
+        dynamic: true,
+      };
+    }
+
     if (tools == null) {
       throw new NoSuchToolError({ toolName: toolCall.toolName });
     }
@@ -101,6 +114,30 @@ async function doParseToolCall<TOOLS extends ToolSet>({
   const tool = tools[toolName];
 
   if (tool == null) {
+    // Fallback: if an OpenAI MCP tool is registered in the tool set,
+    // treat unknown subtool names as provider-executed dynamic calls.
+    const hasOpenAIMcpTool = Object.values(tools).some(t => {
+      if (t == null || typeof t !== 'object') return false;
+      const value = t as Record<string, unknown>;
+      const typeValue = value['type'];
+      if (typeValue !== 'provider-defined') return false;
+      const idValue = value['id'];
+      return typeof idValue === 'string' && idValue === 'openai.mcp';
+    });
+
+    if (hasOpenAIMcpTool) {
+      const parsedInput = await safeParseJSON({ text: toolCall.input });
+      return {
+        type: 'tool-call',
+        toolCallId: toolCall.toolCallId,
+        toolName: toolCall.toolName,
+        input: parsedInput.success ? parsedInput.value : toolCall.input,
+        providerExecuted: true,
+        providerMetadata: toolCall.providerMetadata,
+        dynamic: true,
+      };
+    }
+
     throw new NoSuchToolError({
       toolName: toolCall.toolName,
       availableTools: Object.keys(tools),
